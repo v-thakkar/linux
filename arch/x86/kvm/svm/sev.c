@@ -3208,12 +3208,14 @@ out:
 		sev_es_debug_swap_enabled = false;
 
 	sev_supported_vmsa_features = 0;
-	sev_supported_vmsa_features |= SVM_SEV_FEAT_RESTRICTED_INJECTION;
+	//sev_supported_vmsa_features |= SVM_SEV_FEAT_RESTRICTED_INJECTION;
 	if (sev_es_debug_swap_enabled)
 		sev_supported_vmsa_features |= SVM_SEV_FEAT_DEBUG_SWAP;
 
-	if (sev_snp_restricted_injection_enabled)
+	if (sev_snp_restricted_injection_enabled) {
+		pr_info("reached the if of sev_snp_restricted_injection_enabled");
 		sev_supported_vmsa_features |= SVM_SEV_FEAT_RESTRICTED_INJECTION;
+	}
 
 	if (sev_snp_enabled && cpu_feature_enabled(X86_FEATURE_SNP_SECURE_TSC))
 		sev_supported_vmsa_features |= SVM_SEV_FEAT_SECURE_TSC;
@@ -4172,7 +4174,15 @@ static int sev_snp_ap_creation(struct vcpu_svm *svm)
 
 		/* Interrupt injection mode shouldn't change for AP creation */
 		sev_features = vcpu->arch.regs[VCPU_REGS_RAX];
-
+		/* ──--------- DIAGNOSTIC ---------- */
+        pr_info("KVM-SNP:  VMPL%u  BSP sev_features = %#llx\n",
+                vmpl, sev->vmsa_features[vmpl]);
+        pr_info("KVM-SNP:  VMPL%u   AP sev_features = %#llx\n",
+                vmpl, sev_features);
+        pr_info("KVM-SNP:  VMPL%u   Diff (inj bits) = %#llx\n",
+                vmpl, (sev_features ^ sev->vmsa_features[vmpl]) &
+                      SVM_SEV_FEAT_INT_INJ_MODES);
+        /* ───────────────────────────────- */
 		/*
 		 * The SNPActive feature must at least be set. If the SEV
 		 * features of this AP are zero, this is the first vCPU created at
