@@ -2046,7 +2046,7 @@ static void sev_migrate_from(struct kvm *dst_kvm, struct kvm *src_kvm)
 	kvm_for_each_vcpu(i, dst_vcpu, dst_kvm) {
 		dst_svm = to_svm(dst_vcpu);
 
-		sev_init_vmcb(dst_svm);
+		sev_init_vmcb(dst_svm, false);
 
 		if (!dst->es_active)
 			continue;
@@ -3996,11 +3996,21 @@ next_range:
 	unreachable();
 }
 
-static int __sev_snp_update_protected_guest_state(struct kvm_vcpu *vcpu)
+/*
+ * Invoked as part of svm_vcpu_reset() processing of an init event.
+ */
+static void sev_snp_init_protected_guest_state(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
 
 	WARN_ON(!mutex_is_locked(&svm->sev_es.snp_vmsa_mutex));
+
+	guard(mutex)(&svm->sev_es.snp_vmsa_mutex);
+
+	if (!svm->sev_es.snp_ap_waiting_for_reset)
+		return;
+
+	svm->sev_es.snp_ap_waiting_for_reset = false;
 
 	/* Mark the vCPU as offline and not runnable */
 	vcpu->arch.pv.pv_unhalted = false;
@@ -5041,8 +5051,10 @@ static void sev_es_init_vmcb(struct vcpu_svm *svm)
 		sev_snp_init_vmcb(svm);
 }
 
-void sev_init_vmcb(struct vcpu_svm *svm)
+void sev_init_vmcb(struct vcpu_svm *svm, bool init_event)
 {
+	struct kvm_vcpu *vcpu = &svm->vcpu;
+
 	svm->vmcb->control.nested_ctl |= SVM_NESTED_CTL_SEV_ENABLE;
 	clr_exception_intercept(svm, UD_VECTOR);
 
@@ -5052,7 +5064,10 @@ void sev_init_vmcb(struct vcpu_svm *svm)
 	 */
 	clr_exception_intercept(svm, GP_VECTOR);
 
-	if (sev_es_guest(svm->vcpu.kvm))
+	if (init_event && sev_snp_guest(vcpu->kvm))
+		sev_snp_init_protected_guest_state(vcpu);
+
+	if (sev_es_guest(vcpu->kvm))
 		sev_es_init_vmcb(svm);
 }
 

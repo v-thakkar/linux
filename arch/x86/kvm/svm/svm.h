@@ -742,7 +742,7 @@ void avic_refresh_virtual_apic_mode(struct kvm_vcpu *vcpu);
 /* sev.c */
 
 int pre_sev_run(struct vcpu_svm *svm, int cpu);
-void sev_init_vmcb(struct vcpu_svm *svm);
+void sev_init_vmcb(struct vcpu_svm *svm, bool init_event);
 void sev_vcpu_after_set_cpuid(struct vcpu_svm *svm);
 int sev_es_string_io(struct vcpu_svm *svm, int size, unsigned int port, int in);
 void sev_es_vcpu_reset(struct vcpu_svm *svm);
