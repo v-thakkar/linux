@@ -155,6 +155,14 @@ static bool sev_vcpu_has_debug_swap(struct vcpu_svm *svm)
 	return sev->vmsa_features[vcpu->vmpl] & SVM_SEV_FEAT_DEBUG_SWAP;
 }
 
+static bool snp_is_secure_tsc_enabled(struct kvm *kvm)
+{
+	struct kvm_sev_info *sev = to_kvm_sev_info(kvm);
+
+	return (sev->vmsa_features & SVM_SEV_FEAT_SECURE_TSC) &&
+	       !WARN_ON_ONCE(!sev_snp_guest(kvm));
+}
+
 /* Must be called with the sev_bitmap_lock held */
 static bool __sev_recycle_asids(unsigned int min_asid, unsigned int max_asid)
 {
@@ -431,6 +439,9 @@ static int __sev_guest_init(struct kvm *kvm, struct kvm_sev_cmd *argp,
 
 	if (!verify_init_flags(data, vm_type))
 		return -EINVAL;
+
+	if (!snp_active)
+		valid_vmsa_features &= ~SVM_SEV_FEAT_SECURE_TSC;
 
 	if (data->vmsa_features & ~valid_vmsa_features)
 		return -EINVAL;
@@ -2257,8 +2268,22 @@ static int snp_launch_start(struct kvm *kvm, struct kvm_sev_cmd *argp)
 	if (params.policy & SNP_POLICY_MASK_SINGLE_SOCKET)
 		return -EINVAL;
 
+	if (snp_is_secure_tsc_enabled(kvm)) {
+		if (WARN_ON_ONCE(!kvm->arch.default_tsc_khz))
+			return -EINVAL;
+
+		start.desired_tsc_khz = kvm->arch.default_tsc_khz;
+	}
+
+	sev->policy = params.policy;
+
+	sev->snp_context = snp_context_create(kvm, argp);
+	if (!sev->snp_context)
+		return -ENOTTY;
+
 	start.gctx_paddr = __psp_pa(sev->snp_context);
 	start.policy = params.policy;
+
 	memcpy(start.gosvw, params.gosvw, sizeof(params.gosvw));
 	rc = __sev_issue_cmd(argp->sev_fd, SEV_CMD_SNP_LAUNCH_START, &start, &argp->error);
 	if (rc) {
@@ -3213,6 +3238,9 @@ out:
 
 	if (sev_snp_restricted_injection_enabled)
 		sev_supported_vmsa_features |= SVM_SEV_FEAT_RESTRICTED_INJECTION;
+
+	if (sev_snp_enabled && tsc_khz && cpu_feature_enabled(X86_FEATURE_SNP_SECURE_TSC))
+		sev_supported_vmsa_features |= SVM_SEV_FEAT_SECURE_TSC;
 }
 
 void sev_hardware_unsetup(void)
@@ -4936,6 +4964,9 @@ static void sev_es_vcpu_after_set_cpuid(struct vcpu_svm *svm)
 		set_msr_interception(vcpu, svm->msrpm, MSR_TSC_AUX, v_tsc_aux, v_tsc_aux);
 	}
 
+	svm_set_intercept_for_msr(vcpu, MSR_AMD64_GUEST_TSC_FREQ, MSR_TYPE_R,
+				  !snp_is_secure_tsc_enabled(vcpu->kvm));
+
 	/*
 	 * For SEV-ES, accesses to MSR_IA32_XSS should not be intercepted if
 	 * the host/guest supports its use.
@@ -5101,6 +5132,9 @@ int sev_vcpu_create(struct kvm_vcpu *vcpu)
 
 	vmpl_vmsa(svm) = page_address(vmsa_page);
 	vmpl_vmsa_hpa(svm) = __pa(page_address(vmsa_page));
+	svm->sev_es.vmsa = page_address(vmsa_page);
+
+	vcpu->arch.guest_tsc_protected = snp_is_secure_tsc_enabled(vcpu->kvm);
 
 	return 0;
 }
